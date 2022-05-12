@@ -111,6 +111,7 @@ const load = async () => {
 const touch = async name => {
     await sourceDb.update({ name }, { $set: { owner: faker.name.firstName() } });
     REGISTERS_UPDATED.push(name);
+    sendEvent({}, `Updating register: ${name}`);
     TOTAL_RECORDS_UPDATED += 1;
 };
 
