@@ -50,6 +50,7 @@ const Datastore = require('nedb-promises');
 const _ = require('lodash');
 const the = require('await-the');
 const faker = require('faker');
+const { EventEmitter } = require('events');
 
 // The source database to sync updates from.
 const sourceDb = new Datastore({
@@ -65,19 +66,23 @@ const targetDb = new Datastore({
 
 let TOTAL_RECORDS;
 let EVENTS_SENT = 0;
+let FIRST_SYNC = true;
 const REGISTERS_UPDATED = [];
-
+const registers = [];
 /**
  * Mock function to load data into the sourceDb.
  */
 const load = async () => {
     // Add some documents to the collection.
     // TODO: Maybe dynamically do this? `faker` might be a good library here.
+    registers.push({ name: 'GE', owner: faker.name.firstName(), amount: 1000000 });
+    registers.push({ name: 'Exxon', owner: faker.name.firstName(), amount: 1000000 });
+    registers.push({ name: 'Google', owner: faker.name.firstName(), amount: 1000000 });
 
     const records = [
-        new Promise((res) => { sourceDb.insert({ name: 'GE', owner: 'test', amount: 1000000 }).then((data) => { sendEvent(data); res(data); })}),
-        new Promise((res) => { sourceDb.insert({ name: 'Exxon', owner: 'test2', amount: 5000000 }).then((data) => { sendEvent(data); res(data); })}),
-        new Promise((res) => { sourceDb.insert({ name: 'Google', owner: 'test3', amount: 5000001 }).then((data) => { sendEvent(data); res(data); })}),
+        new Promise((res) => { sourceDb.insert({ name: 'GE', owner: faker.name.firstName(), amount: 1000000 }).then((data) => { sendEvent(data); res(data); })}),
+        new Promise((res) => { sourceDb.insert({ name: 'Exxon', owner: faker.name.firstName(), amount: 5000000 }).then((data) => { sendEvent(data); res(data); })}),
+        new Promise((res) => { sourceDb.insert({ name: 'Google', owner: faker.name.firstName(), amount: 5000001 }).then((data) => { sendEvent(data); res(data); })}),
     ];
 
     for (let i = 0; i < 10; ++i) {
@@ -86,6 +91,7 @@ const load = async () => {
             owner: faker.name.firstName(),
             amount: faker.finance.amount()
         };
+        registers.push(reg);
         records.push(new Promise((res) => { sourceDb.insert(reg).then((data) => { sendEvent(data); res(data); })}));
     }
     
@@ -99,7 +105,7 @@ const load = async () => {
  * sourceDb.
  */
 const touch = async name => {
-    await sourceDb.update({ name }, { $set: { owner: 'test4' } });
+    await sourceDb.update({ name }, { $set: { owner: faker.name.firstName() } });
     REGISTERS_UPDATED.push(name);
 };
 
@@ -196,8 +202,10 @@ const syncNewChanges = async () => {
     // TODO
     console.log(`[START]: Syncing New Changes.`);
     const promsForUpdate = REGISTERS_UPDATED.map(name => {
+        console.log(`Register to update [name]: ${name}.`);
         return new Promise(resolve => {
             sourceDb.find({ name }).then(data => {
+                console.log(`Register found: `, data);
                 targetDb.update({ name }, { $set: { ...data } });
                 sendEvent(data, 'SYNC NEW CHANGE:');
                 resolve(data);
@@ -210,13 +218,47 @@ const syncNewChanges = async () => {
     console.log(`[FINISH]: Syncing New Changes.`);
 }
 
+var intervalForSync;
+var intervalForChange;
+const events = new EventEmitter();
 
+events.on('end', () => {
+    console.log("[FINISH LOOP]: cleaning intervals....");
+    clearInterval(intervalForSync);
+    clearInterval(intervalForChange);
+    console.log("[FINISH LOOP]: all cleared. bye!");
+});
+
+events.on('change', async () => {
+    console.log(`[START]: Updating some reg.`);
+    const item = registers[Math.floor(Math.random() * registers.length)];
+    await touch(item.name);
+    await syncNewChanges();
+    console.log(`[FINISH]: Updating some reg.`);
+});
 /**
  * Implement function to fully sync of the database and then 
  * keep polling for changes.
  */
 const synchronize = async () => {
     // TODO
+    let intervalForSyncLoop = 0;
+    console.log("[START]: Loading data to source DB.");
+
+    await load();
+    console.log("[FINISH]: Loading data to source DB.");
+
+    if (FIRST_SYNC) {
+        syncAllNoLimit();
+    }
+    intervalForSync = setInterval(function () {
+        intervalForSyncLoop += 1;
+        console.log("=====================================");
+        console.log(`Loop number ${intervalForSyncLoop}`);
+        syncNewChanges();
+    }, 10000);
+    intervalForChange = setInterval(() => events.emit('change'), 1000);
+    setTimeout(() => { events.emit('end')}, 50000);
 }
 
 
@@ -262,5 +304,5 @@ const runTest = async () => {
 // TODO:
 // Call synchronize() instead of runTest() when you have synchronize working
 // or add it to runTest().
-runTest();
-// synchronize();
+// runTest();
+synchronize();
